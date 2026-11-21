@@ -17,9 +17,9 @@ st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap');
 html, body, [class*="css"], .stMarkdown, button, input { font-family: 'Hind Siliguri','Nirmala UI','Segoe UI',sans-serif; }
 .block-container{padding-top:1.6rem;max-width:1200px}
-.hero{border:1px solid #dcd6c6;background:#fff;border-radius:14px;padding:20px 26px;margin-bottom:14px}
-.hero h1{color:#1b5e3a;margin:0 0 4px 0;font-size:1.75rem;font-weight:700}
-.hero p{color:#4a5a52;margin:0;font-size:1.02rem}
+.hero{border:0;background:linear-gradient(120deg,#1b5e3a 0%,#2e8b57 55%,#e07b00 130%);border-radius:16px;padding:22px 28px;margin-bottom:14px;box-shadow:0 4px 14px rgba(27,94,58,.25)}
+.hero h1{color:#fff;margin:0 0 4px 0;font-size:1.75rem;font-weight:700}
+.hero p{color:#e8f5ec;margin:0;font-size:1.02rem}
 .bug{display:inline-block;animation:fly 2.5s ease-in-out infinite}
 @keyframes fly{50%{transform:translate(5px,-6px) rotate(8deg)}}
 .fc{background:#fff;border:1px solid #dcd6c6;border-radius:12px;padding:14px 18px;min-height:178px}
@@ -32,11 +32,17 @@ html, body, [class*="css"], .stMarkdown, button, input { font-family: 'Hind Sili
 .act{background:#fff;border:1px solid #dcd6c6;border-radius:12px;padding:12px 18px;margin:14px 0 6px 0}
 [data-testid="stMetric"]{background:#fff;border:1px solid #dcd6c6;border-radius:12px;padding:10px 16px}
 .stTabs [data-baseweb="tab"]{font-weight:600;font-size:1rem}
+.stApp{background:linear-gradient(180deg,#f1f8f3 0%,#fff8ec 100%)}
+[data-testid="stSidebar"]{background:#e6f3ea}
+.fc{box-shadow:0 2px 8px rgba(0,0,0,.07)}
+.act{background:#fff8e1;border-color:#f0d58a;border-left:6px solid #e07b00}
+[data-testid="stMetric"]{border-top:4px solid #2e8b57;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.stTabs [aria-selected="true"]{color:#1b5e3a;background:#dff0e5;border-radius:8px 8px 0 0}
 [data-testid="stSidebar"]{border-right:1px solid #dcd6c6}
 [data-testid="stSidebar"] h2{font-size:1.05rem;color:#1b5e3a}
 </style>""", unsafe_allow_html=True)
 
-# ---------------- ভাষা / language ----------------
+
 TX = {
  "title": ("Urban Dengue Early-Warning System", "শহুরে ডেঙ্গু আগাম সতর্কতা ব্যবস্থা"),
  "subtitle": ("Ward-level forecasts of weekly dengue cases 2, 3 and 4 weeks ahead, built from rainfall, temperature and humidity lags and each ward's vulnerability.",
@@ -126,7 +132,7 @@ TIER_ACTIONS = {
     "Critical": ("Prepare hospital surge capacity, fog daily and clear waste immediately.", "হাসপাতালে অতিরিক্ত রোগীর প্রস্তুতি নিন, প্রতিদিন ফগিং করুন ও বর্জ্য দ্রুত সরান।"),
 }
 
-# ঝুঁকির স্তর অনুযায়ী বিস্তারিত করণীয় (সাধারণ জনস্বাস্থ্য নির্দেশনা; DGHS/সিটি করপোরেশনের নিয়ম প্রযোজ্য)
+
 TIER_PLAN = {
  "Low": {
   "officers": (["Keep weekly larval surveys going in drains, construction sites and tyre stores.",
@@ -206,9 +212,9 @@ b.onclick=()=>{{
 }};
 </script>"""
     html = html.strip()
-    if hasattr(st, "iframe"):          # নতুন Streamlit
+    if hasattr(st, "iframe"):
         st.iframe(html, height=56)
-    else:                              # পুরনো Streamlit
+    else:
         components.html(html, height=56)
 
 
@@ -285,7 +291,7 @@ BASELINES = df[FEATURE_COLS].median()
 
 st.markdown(f"<div class='hero'><h1><span class='bug'>🦟</span> {t('title')}</h1><p>{t('subtitle')}</p></div>", unsafe_allow_html=True)
 
-# ---------------- Sidebar ----------------
+
 st.sidebar.header(t("area"))
 selected_city = st.sidebar.selectbox(t("city"), sorted(df["city"].unique()), key="city", format_func=city_label)
 city_wards = sorted(df[df["city"] == selected_city]["ward_id"].unique())
@@ -327,7 +333,7 @@ pred_cases, ci_low, ci_high, risk_tier = forecasts[horizon]
 
 tab1, tab2, tab3 = st.tabs([t("tab1"), t("tab2"), t("tab3")])
 
-# ---------------- Tab 1 ----------------
+
 with tab1:
     cols = st.columns(3)
     for col, h in zip(cols, HORIZONS):
@@ -336,7 +342,7 @@ with tab1:
         actual = df[(df["ward_id"] == selected_ward) & (df["date"] == issue_date + h * WEEK)]["dengue_cases"]
         atxt = t("actual", n=int(actual.iloc[0])) if len(actual) and pd.notna(actual.iloc[0]) else t("future")
         col.markdown(
-            f"<div class='fc' style='border-left:6px solid {TIER_COLORS[tier]}'>"
+            f"<div class='fc' style='border-left:6px solid {TIER_COLORS[tier]};background:{TIER_COLORS[tier]}18'>"
             f"<div class='fc-h'>{t('fc_title', h=h, d=tdate)}</div>"
             f"<div class='fc-n'>{D(f'{mu:.1f}')} <span>{t('unit')}</span></div>"
             f"<div class='fc-r'>{t('range')}: {D(f'{lo:.1f}')} – {D(f'{hi:.1f}')}</div>"
@@ -382,7 +388,7 @@ with tab1:
                             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig_h, width="stretch")
 
-# ---------------- Tab 2 ----------------
+
 with tab2:
     st.subheader(t("hm_t", c=city_label(selected_city), h=horizon, d=issue_str))
     start = issue_date + 2 * WEEK - 11 * WEEK
@@ -413,7 +419,7 @@ with tab2:
         st.dataframe(tbl, width="stretch", hide_index=True)
         st.caption(t("hm_cap"))
 
-# ---------------- Tab 3 ----------------
+
 with tab3:
     st.subheader(t("val_h"))
     vh = st.selectbox(t("val_sel"), list(HORIZONS), index=list(HORIZONS).index(horizon), key="vh",
