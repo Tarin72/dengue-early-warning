@@ -188,6 +188,7 @@ TIER_COLORS = {"Low": "#2e7d32", "Medium": "#c9a227", "High": "#e07b00", "Critic
 def speak_button(text, lang_code, label, no_voice):
     """ব্রাউজারের নিজস্ব Web Speech API দিয়ে পড়ে শোনায় — কোনো API কল বা খরচ নেই"""
     html = f"""
+<style>html,body{{margin:0;padding:0;overflow:hidden}}</style>
 <div style="font-family:'Hind Siliguri','Nirmala UI','Segoe UI',sans-serif">
 <button id="b" style="background:#1b5e3a;color:#fff;border:0;border-radius:8px;padding:8px 18px;font-size:15px;cursor:pointer">&#9654; {label}</button>
 <span id="m" style="color:#8a5a00;font-size:13px;margin-left:10px"></span></div>
@@ -204,9 +205,9 @@ b.onclick=()=>{{
 </script>"""
     html = html.strip()
     if hasattr(st, "iframe"):          # নতুন Streamlit
-        st.iframe(html, height=50)
+        st.iframe(html, height=56)
     else:                              # পুরনো Streamlit
-        components.html(html, height=50)
+        components.html(html, height=56)
 
 
 lang = st.sidebar.radio("Language / ভাষা", ["English", "বাংলা"], horizontal=True, key="lang")
