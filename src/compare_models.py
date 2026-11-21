@@ -1,4 +1,5 @@
-
+"""মডেল তুলনা (২-সপ্তাহ horizon)। ট্রেইন: টার্গেট < ২০২২, ভ্যালিডেশন: ২০২২–২৩। টেস্ট (২০২৪–২৫) এখানে ছোঁয়া হয় না।
+চালাতে: python src/compare_models.py  → models/model_comparison.csv"""
 import time
 import numpy as np
 import pandas as pd
