@@ -11,7 +11,7 @@ from src.preprocess import (FEATURE_COLS, classify_risk_tier, derive_features,
                             load_and_engineer_features, local_driver_effects, predict_interval)
 from src.train import train_and_evaluate, HORIZONS, TIERS
 
-st.set_page_config(page_title="Dengue Early-Warning | ডেঙ্গু আগাম সতর্কতা", layout="wide")
+st.set_page_config(page_title="Dengue Early-Warning | ডেঙ্গু আগাম সতর্কতা", page_icon="🦟", layout="wide")
 
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap');
@@ -20,6 +20,8 @@ html, body, [class*="css"], .stMarkdown, button, input { font-family: 'Hind Sili
 .hero{border:1px solid #dcd6c6;background:#fff;border-radius:14px;padding:20px 26px;margin-bottom:14px}
 .hero h1{color:#1b5e3a;margin:0 0 4px 0;font-size:1.75rem;font-weight:700}
 .hero p{color:#4a5a52;margin:0;font-size:1.02rem}
+.bug{display:inline-block;animation:fly 2.5s ease-in-out infinite}
+@keyframes fly{50%{transform:translate(5px,-6px) rotate(8deg)}}
 .fc{background:#fff;border:1px solid #dcd6c6;border-radius:12px;padding:14px 18px;min-height:178px}
 .fc-h{color:#5c6b63;font-size:.92rem;font-weight:500}
 .fc-n{font-size:2.1rem;font-weight:700;color:#23312b;line-height:1.25}
@@ -281,7 +283,7 @@ df = get_processed_data()
 df_val = get_validation_data()
 BASELINES = df[FEATURE_COLS].median()
 
-st.markdown(f"<div class='hero'><h1>{t('title')}</h1><p>{t('subtitle')}</p></div>", unsafe_allow_html=True)
+st.markdown(f"<div class='hero'><h1><span class='bug'>🦟</span> {t('title')}</h1><p>{t('subtitle')}</p></div>", unsafe_allow_html=True)
 
 # ---------------- Sidebar ----------------
 st.sidebar.header(t("area"))
