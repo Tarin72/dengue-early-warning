@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.streamlit/secrets.toml
+# অ্যাপ নিজে বানিয়ে নেয় (বড় ক্যাশ ফাইল)
+models/processed_features*.pkl
