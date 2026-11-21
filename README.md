@@ -4,7 +4,7 @@ Ward-level dengue forecasts **2, 3 and 4 weeks after the last observed weather w
 
 ## Quick Local Setup (< 3 minutes)
 ```bash
-git clone <YOUR_GITHUB_REPO_URL>
+git clone https://github.com/Tarin72/dengue-early-warning.git
 cd dengue-early-warning
 pip install -r requirements.txt
 streamlit run app.py
