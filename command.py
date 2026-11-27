@@ -73,6 +73,12 @@ C = {
     "c_load": {"bn": "চূড়ান্ত লোড", "en": "Final load"}, "c_net": {"bn": "নিট ঘাটতি", "en": "Net deficit"},
     "moves": {"bn": "রোগী স্থানান্তরের তালিকা", "en": "Patient transfers"},
     "c_from": {"bn": "থেকে", "en": "From"}, "c_to": {"bn": "যেখানে", "en": "To"}, "c_pat": {"bn": "রোগী", "en": "Patients"},
+    "c_steps": {"bn": "দূরত্ব (ওয়ার্ড নম্বরের ব্যবধান)", "en": "Distance (ward-number gap)"},
+    "bf_title": {"bn": "বেড খুঁজুন: নিজের ওয়ার্ডে না থাকলে কাছের কোথায় আছে", "en": "Bed finder: where to go if the ward is full"},
+    "bf_pick": {"bn": "রোগী কোন ওয়ার্ডের?", "en": "Patient's ward"},
+    "bf_own": {"bn": "এই ওয়ার্ডেই {n}টি বেড খালি আছে। এখানেই ভর্তি করা যাবে।", "en": "This ward has {n} free bed(s). Admit here."},
+    "bf_near": {"bn": "এই ওয়ার্ডে বেড খালি নেই। সবচেয়ে কাছের বেডসহ ওয়ার্ড: {w} ({n}টি খালি, দূরত্ব {s})।", "en": "No free bed in this ward. Nearest ward with beds: {w} ({n} free, distance {s})."},
+    "bf_none": {"bn": "এই শহরের কোনো ওয়ার্ডে এখন বেড খালি নেই। অন্য শহর বা জরুরি ব্যবস্থার সাথে যোগাযোগ করুন।", "en": "No ward in this city has a free bed. Contact another city or emergency services."},
     "no_moves": {"bn": "এই শহরে স্থানান্তরের দরকার নেই।", "en": "No transfers needed in this city."},
     "city_short": {
         "bn": "{c}: {n} জন রোগীর জন্য বেড নেই। পুরো শহরের সব ওয়ার্ড ভরে গেছে।",
@@ -80,8 +86,8 @@ C = {
     },
     "beds_ok": {"bn": "কোনো শহরে বেডের সংকট নেই।", "en": "No city has a bed shortage."},
     "route_how": {
-        "bn": "ওভারফ্লো শুধু একই শহরের ভেতরে যায়, সবচেয়ে বেশি খালি বেডওয়ালা ওয়ার্ডে আগে।",
-        "en": "Overflow moves only inside the same city, to the ward with the most free beds first.",
+        "bn": "ওভারফ্লো শুধু একই শহরের ভেতরে যায়, সবচেয়ে কাছের খালি বেডওয়ালা ওয়ার্ডে আগে। ডেটাসেটে ঠিকানা নেই, তাই 'কাছে' মানে কাছাকাছি ওয়ার্ড নম্বর (অনুমান)।",
+        "en": "Overflow moves only inside the same city, to the nearest ward that has free beds. The dataset has no addresses, so 'nearest' means the closest ward number (assumption).",
     },
     # sim
     "sim_crews": {"bn": "মোতায়েন করার দল", "en": "Crews to deploy"},
@@ -295,6 +301,24 @@ def render_beds_page(artifact, df, issue_date, horizon, lang):
     w, t, city = eng.route_overflow(f, _capacity(df, cap_pct / 100.0))
     st.caption(c("route_how", lang))
 
+    st.markdown(f"**{c('bf_title', lang)}**")
+    order = w.sort_values(["headroom_left", "ward_id"])["ward_id"].tolist()      # full wards first
+    pick = st.selectbox(c("bf_pick", lang), order, format_func=lambda x: ward_label(x, lang), key="cmd_bedfinder")
+    kind, own_free, sug = eng.suggest_beds(w, pick)
+    if kind == "own":
+        st.success(c("bf_own", lang, n=_n(own_free, lang)))
+    elif kind == "none":
+        st.error(c("bf_none", lang))
+    else:
+        top = sug.iloc[0]
+        st.warning(c("bf_near", lang, w=ward_label(top["ward_id"], lang), n=_n(top["headroom_left"], lang),
+                     s=_n(top["steps"], lang)))
+        st.dataframe(pd.DataFrame({
+            c("c_ward", lang): sug["ward_id"].map(lambda x: ward_label(x, lang)),
+            c("c_steps", lang): sug["steps"], c("c_cap", lang): sug["capacity"],
+            c("c_hr", lang): sug["headroom_left"],
+        }), hide_index=True, width="stretch")
+
     short = city[city["unrouted"] > 0]
     if short.empty:
         st.success(c("beds_ok", lang))
@@ -332,7 +356,7 @@ def render_beds_page(artifact, df, issue_date, horizon, lang):
                 st.dataframe(pd.DataFrame({
                     c("c_from", lang): tc["from_ward"].map(lambda x: ward_label(x, lang)),
                     c("c_to", lang): tc["to_ward"].map(lambda x: ward_label(x, lang)),
-                    c("c_pat", lang): tc["patients"],
+                    c("c_pat", lang): tc["patients"], c("c_steps", lang): tc["steps"],
                 }), hide_index=True, width="stretch")
 
 

@@ -123,31 +123,36 @@ def supply_summary(f, stock_pct):
 # 2. Cross-ward overflow routing (strictly inside each city)
 # ----------------------------------------------------------------------------
 def route_overflow(f, capacity, default_capacity=MIN_WARD_BEDS):
-    """Move bed overflow to the same city's wards with the most headroom.
+    """Move bed overflow to the NEAREST ward of the same city that still has free beds.
 
-    Returns (ward_df, transfers_df, city_df).
+    The dataset has no coordinates, so "nearest" = closest ward number inside the city
+    (ties: the ward with the most free beds). Returns (ward_df, transfers_df, city_df).
     """
     w = f[["ward_id", "city", "beds_required"]].copy()
     w["capacity"] = w["ward_id"].map(capacity).fillna(default_capacity).astype(int)
     w["overflow"] = (w["beds_required"] - w["capacity"]).clip(lower=0)
     w["headroom"] = (w["capacity"] - w["beds_required"]).clip(lower=0)
+    w["num"] = w["ward_id"].str.extract(r"(\d+)$")[0].astype(int)
 
     transfers, unrouted = [], {}
     for city, g in w.sort_values("ward_id").groupby("city"):
         head = dict(zip(g["ward_id"], g["headroom"]))
+        num = dict(zip(g["ward_id"], g["num"]))
         for src in g.sort_values(["overflow", "ward_id"], ascending=[False, True]).itertuples():
             left = int(src.overflow)
             while left > 0:
-                dst = max(head, key=head.get)
-                if head[dst] <= 0:
+                cands = [x for x in head if head[x] > 0 and x != src.ward_id]
+                if not cands:
                     break
+                dst = min(cands, key=lambda x: (abs(num[x] - src.num), -head[x], x))
                 n = int(min(left, head[dst]))
-                transfers.append({"city": city, "from_ward": src.ward_id, "to_ward": dst, "patients": n})
+                transfers.append({"city": city, "from_ward": src.ward_id, "to_ward": dst, "patients": n,
+                                  "steps": int(abs(num[dst] - src.num))})
                 head[dst] -= n
                 left -= n
             unrouted[src.ward_id] = left
 
-    t = pd.DataFrame(transfers, columns=["city", "from_ward", "to_ward", "patients"])
+    t = pd.DataFrame(transfers, columns=["city", "from_ward", "to_ward", "patients", "steps"])
     sent = t.groupby("from_ward")["patients"].sum() if not t.empty else pd.Series(dtype=int)
     recv = t.groupby("to_ward")["patients"].sum() if not t.empty else pd.Series(dtype=int)
     w["sent"] = w["ward_id"].map(sent).fillna(0).astype(int)
@@ -165,6 +170,18 @@ def route_overflow(f, capacity, default_capacity=MIN_WARD_BEDS):
     c["util_before"] = c["beds_required"] / c["capacity"].clip(lower=1)
     c["util_after"] = (c["beds_required"] - c["unrouted"]) / c["capacity"].clip(lower=1)
     return w, t, c
+
+
+def suggest_beds(w, ward_id, k=3):
+    """Bed finder. Returns (kind, free_beds_in_own_ward, table_of_nearest_wards_with_free_beds).
+    kind: 'own' (own ward has a free bed) | 'nearby' | 'none' (no free bed anywhere in the city)."""
+    me = w[w["ward_id"] == ward_id].iloc[0]
+    if me["headroom_left"] > 0:
+        return "own", int(me["headroom_left"]), pd.DataFrame()
+    cand = w[(w["city"] == me["city"]) & (w["ward_id"] != ward_id) & (w["headroom_left"] > 0)].copy()
+    cand["steps"] = (cand["num"] - me["num"]).abs()
+    cand = cand.sort_values(["steps", "headroom_left"], ascending=[True, False]).head(k)
+    return ("nearby" if len(cand) else "none"), 0, cand[["ward_id", "steps", "capacity", "headroom_left"]]
 
 
 # ----------------------------------------------------------------------------
