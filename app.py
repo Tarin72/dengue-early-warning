@@ -1,260 +1,146 @@
-import os
+import html as html_lib
 import json
+import os
 import joblib
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
+import auth
+from logo import LOGO_SVG
+from operations import S as OPS_TEXT, render_operations_page
+from command import C as CMD_TEXT, render_beds_page, render_dispatch_page, render_resources_page, render_whatif_page
 import streamlit.components.v1 as components
-from src.preprocess import (FEATURE_COLS, classify_risk_tier, derive_features,
-                            load_and_engineer_features, local_driver_effects, predict_interval)
-from src.train import train_and_evaluate, HORIZONS, TIERS
 
-st.set_page_config(page_title="Dengue Early-Warning | ডেঙ্গু আগাম সতর্কতা", page_icon="🦟", layout="wide")
+from i18n import (
+    TIER_ACTIONS,
+    TIER_PLAN,
+    city_label,
+    driver_label,
+    fmt_date,
+    fmt_num,
+    t,
+    tier_name,
+    to_bn_digits,
+    ward_label,
+)
+from styles import TIER_STYLES, TOKENS, build_css, risk_badge_html
+from src.preprocess import (
+    FEATURE_COLS,
+    classify_risk_tier,
+    derive_features,
+    load_and_engineer_features,
+    local_driver_effects,
+    predict_interval,
+)
+from src.train import HORIZONS, TIERS, train_and_evaluate
 
-st.markdown("""<style>
-@import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap');
-html, body, [class*="css"], .stMarkdown, button, input { font-family: 'Hind Siliguri','Nirmala UI','Segoe UI',sans-serif; }
-.block-container{padding-top:1.6rem;max-width:1200px}
-.hero{border:0;background:linear-gradient(120deg,#1b5e3a 0%,#2e8b57 55%,#e07b00 130%);border-radius:16px;padding:22px 28px;margin-bottom:14px;box-shadow:0 4px 14px rgba(27,94,58,.25)}
-.hero h1{color:#fff;margin:0 0 4px 0;font-size:1.75rem;font-weight:700}
-.hero p{color:#e8f5ec;margin:0;font-size:1.02rem}
-.bug{display:inline-block;animation:fly 2.5s ease-in-out infinite}
-@keyframes fly{50%{transform:translate(5px,-6px) rotate(8deg)}}
-.fc{background:#fff;border:1px solid #dcd6c6;border-radius:12px;padding:14px 18px;min-height:178px}
-.fc-h{color:#5c6b63;font-size:.92rem;font-weight:500}
-.fc-n{font-size:2.1rem;font-weight:700;color:#23312b;line-height:1.25}
-.fc-n span{font-size:.95rem;font-weight:500;color:#5c6b63}
-.fc-r{color:#5c6b63;font-size:.9rem}
-.fc-a{color:#8a8f87;font-size:.85rem;margin-bottom:8px}
-.badge{color:#fff;padding:4px 14px;border-radius:6px;font-weight:600;font-size:.95rem}
-.act{background:#fff;border:1px solid #dcd6c6;border-radius:12px;padding:12px 18px;margin:14px 0 6px 0}
-[data-testid="stMetric"]{background:#fff;border:1px solid #dcd6c6;border-radius:12px;padding:10px 16px}
-.stTabs [data-baseweb="tab"]{font-weight:600;font-size:1rem}
-.stApp{background:linear-gradient(180deg,#f1f8f3 0%,#fff8ec 100%)}
-[data-testid="stSidebar"]{background:#e6f3ea}
-.fc{box-shadow:0 2px 8px rgba(0,0,0,.07)}
-.act{background:#fff8e1;border-color:#f0d58a;border-left:6px solid #e07b00}
-[data-testid="stMetric"]{border-top:4px solid #2e8b57;box-shadow:0 2px 8px rgba(0,0,0,.06)}
-.stTabs [aria-selected="true"]{color:#1b5e3a;background:#dff0e5;border-radius:8px 8px 0 0}
-[data-testid="stSidebar"]{border-right:1px solid #dcd6c6}
-[data-testid="stSidebar"] h2{font-size:1.05rem;color:#1b5e3a}
-</style>""", unsafe_allow_html=True)
+st.set_page_config(
+    page_title="ডেঙ্গু আগাম সতর্কতা | Dengue Early Warning",
+    page_icon="🦟",
+    layout="wide",
+)
 
-
-TX = {
- "title": ("Urban Dengue Early-Warning System", "শহুরে ডেঙ্গু আগাম সতর্কতা ব্যবস্থা"),
- "subtitle": ("Ward-level forecasts of weekly dengue cases 2, 3 and 4 weeks ahead, built from rainfall, temperature and humidity lags and each ward's vulnerability.",
-              "বৃষ্টি, তাপমাত্রা ও আর্দ্রতার আগের সপ্তাহের তথ্য এবং ওয়ার্ডের ঝুঁকি থেকে ২, ৩ ও ৪ সপ্তাহ আগে ওয়ার্ড অনুযায়ী ডেঙ্গুর পূর্বাভাস।"),
- "area": ("1. Area and forecast window", "১. এলাকা ও পূর্বাভাসের সময়"),
- "city": ("City", "শহর"), "ward": ("Ward", "ওয়ার্ড"),
- "issue": ("Last observed weather week", "সর্বশেষ আবহাওয়ার সপ্তাহ"),
- "horizon": ("Forecast horizon (weeks ahead)", "কত সপ্তাহ পরের পূর্বাভাস"),
- "info": ("Weather observed up to {t}. Forecasts are for the weeks of {a}, {b} and {c}. The 3- and 4-week models use older weather, so they are a little less accurate (see the Validation tab).",
-          "{t} পর্যন্ত আবহাওয়া ধরা হয়েছে। পূর্বাভাস {a}, {b} ও {c} তারিখের সপ্তাহের। ৩ ও ৪ সপ্তাহের মডেল পুরনো আবহাওয়া ব্যবহার করে, তাই একটু কম নির্ভুল (ভ্যালিডেশন ট্যাব দেখুন)।"),
- "sim": ("2. Weather scenario", "২. আবহাওয়ার পরিস্থিতি"),
- "simcap": ("Change the observed weather to see how the forecast reacts. Defaults are the real values.",
-            "আবহাওয়া বদলে দেখুন পূর্বাভাস কীভাবে বদলায়। শুরুতে আসল মান দেওয়া আছে।"),
- "r1": ("Rainfall, last observed week (mm)", "বৃষ্টি, সর্বশেষ সপ্তাহ (মিমি)"),
- "r2": ("Rainfall, 1 week earlier (mm)", "বৃষ্টি, ১ সপ্তাহ আগে (মিমি)"),
- "r3": ("Rainfall, 2 weeks earlier (mm)", "বৃষ্টি, ২ সপ্তাহ আগে (মিমি)"),
- "temp": ("Average temperature, last 3 weeks (°C)", "গড় তাপমাত্রা, গত ৩ সপ্তাহ (°সে)"),
- "hum": ("Relative humidity, last 3 weeks (%)", "আপেক্ষিক আর্দ্রতা, গত ৩ সপ্তাহ (%)"),
- "tab1": ("Forecast and drivers", "পূর্বাভাস ও কারণ"),
- "tab2": ("Ward risk heatmap", "ওয়ার্ড ঝুঁকির হিটম্যাপ"),
- "tab3": ("Validation", "ভ্যালিডেশন"),
- "fc_title": ("{h} weeks ahead · week of {d}", "{h} সপ্তাহ পরে · {d} তারিখের সপ্তাহ"),
- "unit": ("cases / week", "কেস / সপ্তাহ"),
- "range": ("80% range", "৮০% সম্ভাব্য সীমা"),
- "actual": ("Actual: {n}", "আসলে হয়েছিল: {n}"), "future": ("Future week", "ভবিষ্যৎ সপ্তাহ"),
- "act": ("What to do for the {h}-week forecast ({tier})", "{h} সপ্তাহের পূর্বাভাসে করণীয় ({tier})"),
- "drv": ("What is driving this forecast", "এই পূর্বাভাসের পেছনের কারণ"),
- "drv_t": ("Change in predicted cases compared with typical conditions ({w}, {h} weeks ahead)",
-           "সাধারণ অবস্থার তুলনায় পূর্বাভাসিত কেসের পরিবর্তন ({w}, {h} সপ্তাহ পরে)"),
- "drv_x": ("Change in predicted cases per week", "সাপ্তাহিক কেসের পরিবর্তন"),
- "drv_cap": ("Each bar shows how much the model's forecast changes if that factor were at its typical (median) value and everything else stayed the same.",
-             "প্রতিটি দণ্ড দেখায় ঐ কারণটি সাধারণ (মধ্যমান) অবস্থায় থাকলে মডেলের পূর্বাভাস কতটা বদলাত, বাকি সব একই ধরে।"),
- "up": ("Raises risk", "ঝুঁকি বাড়ায়"), "down": ("Lowers risk", "ঝুঁকি কমায়"),
- "Rainfall (lags 2–4w)": ("Rainfall (2–4 weeks earlier)", "বৃষ্টি (২–৪ সপ্তাহ আগের)"),
- "Temperature": ("Temperature", "তাপমাত্রা"), "Humidity": ("Humidity", "আর্দ্রতা"),
- "Water-logging risk": ("Water-logging risk", "জলাবদ্ধতার ঝুঁকি"),
- "Population density": ("Population density", "জনঘনত্ব"), "Sanitation": ("Sanitation", "স্যানিটেশন"),
- "hist": ("Rainfall and cases, last 52 weeks", "বৃষ্টি ও কেস, গত ৫২ সপ্তাহ"),
- "hist_rain": ("Rain in the 2–4 week window (mm)", "২–৪ সপ্তাহের বৃষ্টি (মিমি)"),
- "hist_cases": ("Weekly cases", "সাপ্তাহিক কেস"), "hist_y": ("Dengue cases", "ডেঙ্গু কেস"), "hist_y2": ("Rain (mm)", "বৃষ্টি (মিমি)"),
- "hm_t": ("{c}: ward by week forecast ({h} weeks ahead, issued {d})", "{c}: ওয়ার্ড ও সপ্তাহ অনুযায়ী পূর্বাভাস ({h} সপ্তাহ পরে, {d} তারিখে দেওয়া)"),
- "hm_x": ("Target week", "লক্ষ্য সপ্তাহ"), "hm_y": ("Ward", "ওয়ার্ড"), "hm_c": ("Cases / week", "কেস / সপ্তাহ"),
- "pri": ("Ward priority list for the week of {d}", "{d} তারিখের সপ্তাহের ওয়ার্ড অগ্রাধিকার তালিকা"),
- "c_ward": ("Ward", "ওয়ার্ড"), "c_pred": ("Predicted cases", "পূর্বাভাসিত কেস"), "c_lo": ("Low end", "সর্বনিম্ন"),
- "c_hi": ("High end", "সর্বোচ্চ"), "c_tier": ("Risk level", "ঝুঁকির স্তর"), "c_rain": ("Rain, 2–4 wk (mm)", "বৃষ্টি, ২–৪ সপ্তাহ (মিমি)"),
- "c_wl": ("Water-logging index", "জলাবদ্ধতা সূচক"), "c_pop": ("Density per km²", "জনঘনত্ব/বর্গকিমি"),
- "hm_cap": ("The heatmap uses real observed weather for the last 12 target weeks. The scenario sliders affect only the first tab.",
-            "হিটম্যাপে শেষ ১২টি লক্ষ্য সপ্তাহের আসল আবহাওয়া ব্যবহার হয়েছে। স্লাইডার শুধু প্রথম ট্যাবে কাজ করে।"),
- "val_h": ("Chronological validation (2024–2025 held-out weeks)", "সময়ানুক্রমিক ভ্যালিডেশন (২০২৪–২০২৫ এর অদেখা সপ্তাহ)"),
- "val_sel": ("Horizon to validate (weeks)", "কোন সপ্তাহের পূর্বাভাস যাচাই হবে"),
- "val_cap": ("Trained on target weeks {tr}; tested on unseen weeks {te}. 80% range coverage on the test weeks: {c1}% (weeks with 3 or more predicted cases), {c0}% overall.",
-             "প্রশিক্ষণ: {tr}; অদেখা পরীক্ষা: {te}। ৮০% সীমার কভারেজ: {c1}% (৩ বা বেশি কেস পূর্বাভাস এমন সপ্তাহে), সব মিলিয়ে {c0}%।"),
- "gap": ("Train vs test MAE gap", "ট্রেন ও টেস্ট MAE এর ব্যবধান"),
- "lowof": ("Little overfitting", "ওভারফিটিং কম"), "chkof": ("Check overfitting", "ওভারফিটিং যাচাই করুন"),
- "cm_t": ("Risk level: actual vs predicted (all wards)", "ঝুঁকির স্তর: আসল বনাম পূর্বাভাস (সব ওয়ার্ড)"),
- "cm_x": ("Predicted", "পূর্বাভাস"), "cm_y": ("Actual", "আসল"), "cm_c": ("Ward-weeks", "ওয়ার্ড-সপ্তাহ"),
- "rec_h": ("Share of each real risk level that the model caught", "প্রতিটি আসল ঝুঁকির স্তরের কত শতাংশ মডেল ধরতে পেরেছে"),
- "rec_a": ("Recall %", "ধরা পড়েছে %"), "rec_b": ("Share of real weeks %", "আসল সপ্তাহের অংশ %"),
- "al_r": ("High/Critical alert recall", "উচ্চ/সংকটজনক সতর্কতায় ধরা পড়ার হার"),
- "al_p": ("High/Critical alert precision", "উচ্চ/সংকটজনক সতর্কতার নির্ভুলতা"),
- "al_cap": ("Overall accuracy looks high because most weeks are Low. The alert numbers show how well real outbreaks are caught.",
-            "বেশির ভাগ সপ্তাহ কম ঝুঁকির, তাই মোট নির্ভুলতা বেশি দেখায়। প্রকৃত প্রাদুর্ভাব কতটা ধরা পড়ছে তা সতর্কতার সংখ্যাগুলো দেখায়।"),
- "av_t": ("Actual vs predicted weekly cases, {h} weeks ahead ({w})", "সাপ্তাহিক কেস: আসল বনাম পূর্বাভাস, {h} সপ্তাহ পরে ({w})"),
- "av_int": ("80% range", "৮০% সীমা"), "av_a": ("Actual", "আসল"), "av_p": ("Predicted", "পূর্বাভাস"),
- "av_x": ("Week", "সপ্তাহ"), "av_y": ("Weekly cases", "সাপ্তাহিক কেস"),
- "mae": ("{w}: average error (MAE)", "{w}: গড় ত্রুটি (MAE)"), "rmse": ("{w}: RMSE", "{w}: RMSE (বড় ভুলের মাপ)"),
- "col_mae": ("MAE", "MAE (গড় ত্রুটি)"), "col_rmse": ("RMSE", "RMSE"), "col_r2": ("R²", "R²"),
- "col_acc": ("Risk-level accuracy %", "ঝুঁকির স্তরে নির্ভুলতা %"),
- "m_ridge": ("Ridge baseline", "রিজ বেসলাইন"), "m_hgb": ("Gradient boosting (Poisson), chosen model", "গ্রেডিয়েন্ট বুস্টিং (পয়সন), নির্বাচিত মডেল"),
- "to": (" to ", " থেকে "),
- "plan_t": ("Detailed action plan for {tier} risk ({h} weeks ahead)", "{tier} ঝুঁকির বিস্তারিত করণীয় ({h} সপ্তাহ পরের জন্য)"),
- "plan_o": ("For city corporation and health officers", "সিটি করপোরেশন ও স্বাস্থ্য কর্মকর্তাদের জন্য"),
- "plan_p": ("For residents", "বাসিন্দাদের জন্য"),
- "plan_n": ("This is general guidance only. Follow the national dengue guidelines (DGHS) and your city corporation's protocols, and see a doctor for any illness.",
-            "এটি শুধু সাধারণ নির্দেশনা। স্বাস্থ্য অধিদপ্তরের (DGHS) জাতীয় ডেঙ্গু নির্দেশিকা ও সিটি করপোরেশনের নিয়ম মেনে চলুন, অসুস্থ হলে ডাক্তার দেখান।"),
- "listen": ("Listen to this forecast", "পূর্বাভাসটি শুনুন"),
- "novoice": ("No English voice found on this device.", "এই ডিভাইসে বাংলা কণ্ঠ পাওয়া যায়নি; Microsoft Edge ব্রাউজারে চেষ্টা করুন।"),
- "say": ("{w}. Forecast {h} weeks ahead: about {n} cases per week. Risk level: {tier}. {act}",
-         "{w}। {h} সপ্তাহ পরের পূর্বাভাস: সপ্তাহে প্রায় {n}টি কেস। ঝুঁকির স্তর: {tier}। করণীয়: {act}"), "cw": ("cases/week", "কেস/সপ্তাহ"),
- "model": ("Model", "মডেল"),
-}
-TIER_BN = {"Low": "কম", "Medium": "মাঝারি", "High": "উচ্চ", "Critical": "সংকটজনক"}
-TIER_ACTIONS = {
-    "Low": ("Keep routine mosquito surveillance and weekly drain checks.", "নিয়মিত মশা নজরদারি ও সাপ্তাহিক ড্রেন পরিদর্শন চালিয়ে যান।"),
-    "Medium": ("Send targeted larvicide teams to standing water and construction sites.", "জমা পানি ও নির্মাণস্থলে লক্ষ্যভিত্তিক লার্ভিসাইড টিম পাঠান।"),
-    "High": ("Increase fogging and larviciding; warn local clinics to stock IV saline and NS1 kits.", "ফগিং ও লার্ভিসাইডিং বাড়ান; স্থানীয় ক্লিনিককে স্যালাইন ও NS1 কিট মজুতের সতর্কতা দিন।"),
-    "Critical": ("Prepare hospital surge capacity, fog daily and clear waste immediately.", "হাসপাতালে অতিরিক্ত রোগীর প্রস্তুতি নিন, প্রতিদিন ফগিং করুন ও বর্জ্য দ্রুত সরান।"),
-}
-
-
-TIER_PLAN = {
- "Low": {
-  "officers": (["Keep weekly larval surveys going in drains, construction sites and tyre stores.",
-                "Finish drain cleaning and waste collection before the next heavy rain.",
-                "Check that larvicide, spraying equipment and dengue test kits are in stock."],
-               ["ড্রেন, নির্মাণস্থল ও টায়ারের দোকানে সাপ্তাহিক লার্ভা জরিপ চালিয়ে যান।",
-                "পরবর্তী ভারী বৃষ্টির আগেই ড্রেন পরিষ্কার ও বর্জ্য অপসারণ শেষ করুন।",
-                "লার্ভিসাইড, স্প্রে সরঞ্জাম ও ডেঙ্গু পরীক্ষার কিট মজুত আছে কিনা দেখুন।"]),
-  "public": (["Empty and scrub flower pots, buckets, coolers and tyres once a week.",
-              "Keep water storage containers tightly covered.",
-              "Learn the symptoms: fever, severe headache, pain behind the eyes, body aches."],
-             ["ফুলের টব, বালতি, কুলার ও টায়ারের পানি সপ্তাহে একবার ফেলে ঘষে পরিষ্কার করুন।",
-              "পানি জমিয়ে রাখার পাত্র ভালোভাবে ঢেকে রাখুন।",
-              "লক্ষণ চিনে রাখুন: জ্বর, তীব্র মাথাব্যথা, চোখের পেছনে ব্যথা, গা ব্যথা।"]),
- },
- "Medium": {
-  "officers": (["Send larvicide teams to standing-water hotspots: blocked drains, construction sites, tyre dumps.",
-                "Start door-to-door container checks in the most crowded parts of the ward.",
-                "Brief local clinics on dengue case definition and NS1 testing in the first days of fever."],
-               ["জমা পানির হটস্পটে (বন্ধ ড্রেন, নির্মাণস্থল, টায়ারের স্তূপ) লার্ভিসাইড টিম পাঠান।",
-                "ওয়ার্ডের ঘনবসতিপূর্ণ এলাকায় বাড়ি বাড়ি পানির পাত্র পরীক্ষা শুরু করুন।",
-                "স্থানীয় ক্লিনিকগুলোকে ডেঙ্গুর সংজ্ঞা ও জ্বরের প্রথম কয়েক দিনে NS1 পরীক্ষা সম্পর্কে অবহিত করুন।"]),
-  "public": (["Empty water containers every 2 to 3 days; remove water collected around the home.",
-              "Use window screens or mosquito nets, and repellent in the daytime.",
-              "If fever lasts more than 2 days, see a doctor instead of waiting."],
-             ["২–৩ দিন পরপর পানির পাত্র খালি করুন; বাড়ির আশপাশের জমা পানি সরান।",
-              "জানালায় নেট বা মশারি ব্যবহার করুন, দিনেও মশা তাড়ানোর ক্রিম লাগান।",
-              "জ্বর ২ দিনের বেশি থাকলে অপেক্ষা না করে ডাক্তার দেখান।"]),
- },
- "High": {
-  "officers": (["Intensify larviciding and source reduction. Use fogging only as a supplement against adult mosquitoes, not a replacement.",
-                "Alert clinics and hospitals to stock IV saline, NS1/IgM test kits and blood-count (platelet) monitoring.",
-                "Clear waste and fix drainage or water-logging points in the ward within days."],
-               ["লার্ভিসাইডিং ও উৎস ধ্বংস বাড়ান। ফগিং শুধু প্রাপ্তবয়স্ক মশার বিরুদ্ধে সম্পূরক হিসেবে করুন, মূল উপায় হিসেবে নয়।",
-                "ক্লিনিক ও হাসপাতালকে স্যালাইন, NS1/IgM কিট এবং রক্তের প্লেটলেট পরীক্ষার প্রস্তুতি রাখতে সতর্ক করুন।",
-                "ওয়ার্ডের বর্জ্য সরান এবং ড্রেনেজ বা জলাবদ্ধতার স্থানগুলো কয়েক দিনের মধ্যে ঠিক করুন।"]),
-  "public": (["Aedes bites in the daytime, mostly morning and late afternoon: use nets, long sleeves and repellent.",
-              "With fever, get tested early. Take paracetamol for fever and drink plenty of fluids.",
-              "Do not take aspirin or ibuprofen (NSAIDs) for dengue fever."],
-             ["এডিস মশা দিনে কামড়ায়, বিশেষ করে সকাল ও বিকেলে: মশারি, লম্বা হাতার জামা ও রিপেলেন্ট ব্যবহার করুন।",
-              "জ্বর হলে তাড়াতাড়ি পরীক্ষা করান। জ্বরের জন্য প্যারাসিটামল খান ও প্রচুর তরল পান করুন।",
-              "ডেঙ্গু জ্বরে অ্যাসপিরিন বা আইবুপ্রোফেন (NSAID) খাবেন না।"]),
- },
- "Critical": {
-  "officers": (["Start a ward-level emergency response: daily larviciding, fogging and waste clearance.",
-                "Prepare hospital surge capacity: extra beds, a dengue corner, IV saline and test kits.",
-                "Use ward councillors, schools, mosques and loudspeakers for public warnings; report cases daily."],
-               ["ওয়ার্ড পর্যায়ে জরুরি প্রতিক্রিয়া শুরু করুন: প্রতিদিন লার্ভিসাইডিং, ফগিং ও বর্জ্য অপসারণ।",
-                "হাসপাতালে অতিরিক্ত বেড, ডেঙ্গু কর্নার, স্যালাইন ও পরীক্ষার কিটের প্রস্তুতি নিন।",
-                "ওয়ার্ড কাউন্সিলর, স্কুল, মসজিদ ও মাইকের মাধ্যমে জনসতর্কতা দিন; প্রতিদিন রোগীর তথ্য জানান।"]),
-  "public": (["Go to a hospital immediately for warning signs: severe belly pain, repeated vomiting, bleeding gums or nose, black stool, drowsiness or restlessness, difficulty breathing.",
-              "Also follow every step for High risk: nets, repellent, early testing, paracetamol only.",
-              "Check and empty every water container around the home today."],
-             ["সতর্ক লক্ষণ দেখা দিলেই সঙ্গে সঙ্গে হাসপাতালে যান: তীব্র পেটব্যথা, বারবার বমি, মাড়ি বা নাক থেকে রক্তপাত, কালো পায়খানা, ঝিমুনি বা অস্থিরতা, শ্বাসকষ্ট।",
-              "উচ্চ ঝুঁকির সব নিয়মও মানুন: মশারি, রিপেলেন্ট, দ্রুত পরীক্ষা, শুধু প্যারাসিটামল।",
-              "আজই বাড়ির আশপাশের সব পানির পাত্র দেখে খালি করুন।"]),
- },
-}
-TIER_COLORS = {"Low": "#2e7d32", "Medium": "#c9a227", "High": "#e07b00", "Critical": "#b3261e"}
-
-def speak_button(text, lang_code, label, no_voice):
-    """ব্রাউজারের নিজস্ব Web Speech API দিয়ে পড়ে শোনায় — কোনো API কল বা খরচ নেই"""
-    html = f"""
-<style>html,body{{margin:0;padding:0;overflow:hidden}}</style>
-<div style="font-family:'Hind Siliguri','Nirmala UI','Segoe UI',sans-serif">
-<button id="b" style="background:#1b5e3a;color:#fff;border:0;border-radius:8px;padding:8px 18px;font-size:15px;cursor:pointer">&#9654; {label}</button>
-<span id="m" style="color:#8a5a00;font-size:13px;margin-left:10px"></span></div>
-<script>
-const text={json.dumps(text)}, lang={json.dumps(lang_code)}, nov={json.dumps(no_voice)};
-const b=document.getElementById('b'), m=document.getElementById('m');
-b.onclick=()=>{{
-  const s=window.speechSynthesis; s.cancel();
-  const u=new SpeechSynthesisUtterance(text); u.lang=lang;
-  const v=s.getVoices().find(x=>x.lang.toLowerCase().replace('_','-').startsWith(lang.slice(0,2).toLowerCase()));
-  if(v){{u.voice=v; m.textContent='';}} else {{m.textContent=nov;}}
-  s.speak(u);
-}};
-</script>"""
-    html = html.strip()
-    if hasattr(st, "iframe"):
-        st.iframe(html, height=56)
-    else:
-        components.html(html, height=56)
-
-
-lang = st.sidebar.radio("Language / ভাষা", ["English", "বাংলা"], horizontal=True, key="lang")
-L = 0 if lang == "English" else 1
-
-
-BN_DIG = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
-CITY_BN = {"Dhaka North": "ঢাকা উত্তর", "Dhaka South": "ঢাকা দক্ষিণ", "Chattogram": "চট্টগ্রাম",
-           "Gazipur": "গাজীপুর", "Narayanganj": "নারায়ণগঞ্জ"}
-CORP_BN = {"DNCC": "ডিএনসিসি", "DSCC": "ডিএসসিসি", "CCC": "চসিক", "GCC": "জিসিসি", "NCC": "এনসিসি"}
-
-
-def D(x):
-    """বাংলা মোডে ইংরেজি অঙ্ক বাংলা অঙ্কে দেখায়"""
-    return str(x).translate(BN_DIG) if L == 1 else str(x)
-
-
-def t(key, **kw):
-    s = TX[key][L]
-    return D(s.format(**kw)) if kw else s
-
-
-def city_label(c):
-    return CITY_BN.get(c, c) if L == 1 else c
-
-
-def ward_label(w):
-    if L == 0:
-        return w
-    corp, _, num = w.split("_")
-    return D(f"{CORP_BN.get(corp, corp)} ওয়ার্ড {num}")
-
-
-def tier_name(x):
-    return x if L == 0 else TIER_BN[x]
-
-
+PLOTLY_CONFIG = {"displayModeBar": False, "responsive": True}
 DATA = "data/hackathon_preli_dataset.xlsx"
 WEEK = pd.Timedelta(weeks=1)
+
+
+def _active_lang():
+    return "en" if st.session_state.get("lang") == "English" else "bn"
+
+
+def _keep_lang():
+    if st.session_state.get("lang") in ("বাংলা", "English"):
+        st.session_state["_last_lang"] = st.session_state["lang"]
+    else:
+        st.session_state["lang"] = st.session_state.get("_last_lang", "বাংলা")
+
+
+def _keep_horizon():
+    if st.session_state.get("hz") in HORIZONS:
+        st.session_state["_last_hz"] = st.session_state["hz"]
+    else:
+        st.session_state["hz"] = st.session_state.get("_last_hz", 2)
+
+
+def _select_horizon(h):
+    st.session_state["hz"] = h
+    st.session_state["_last_hz"] = h
+
+
+def _set_help(topic):
+    st.session_state["help_topic"] = topic
+
+
+def _reset_weather(sk, defaults):
+    for prefix in defaults:
+        st.session_state.pop(prefix + sk, None)
+
+
+def speak_button(text, lang_code, play_label, stop_label, no_voice, widget_id="tts"):
+    """Offline-safe browser Web Speech API playback with Play/Stop and fallback."""
+    safe_play = html_lib.escape(play_label)
+    safe_stop = html_lib.escape(stop_label)
+    html_doc = f"""<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html,body{{margin:0;padding:2px 0;overflow:hidden;font-family:"Noto Sans Bengali","Nirmala UI","Segoe UI",sans-serif;background:transparent}}
+.wrap{{display:flex;align-items:center;gap:10px;flex-wrap:wrap}}
+button{{min-height:44px;padding:8px 18px;border-radius:10px;border:1.5px solid #1F4E8C;background:#1F4E8C;color:#FFFFFF;font-size:16px;font-weight:600;cursor:pointer}}
+button.playing{{background:#FFFFFF;color:#1F4E8C}}
+button:focus-visible{{outline:3px solid #0B5C8A;outline-offset:2px}}
+.msg{{color:#7A5200;font-size:14px;font-weight:600}}
+</style></head><body>
+<div class="wrap">
+  <button id="btn_{widget_id}" type="button" aria-pressed="false">&#9654; {safe_play}</button>
+  <span id="msg_{widget_id}" class="msg" role="status" aria-live="polite"></span>
+</div>
+<script>
+const text={json.dumps(text)}, lang={json.dumps(lang_code)},
+      playLbl={json.dumps(play_label)}, stopLbl={json.dumps(stop_label)},
+      nov={json.dumps(no_voice)};
+const btn=document.getElementById("btn_{widget_id}"), msg=document.getElementById("msg_{widget_id}");
+let speaking=false;
+function findVoice(){{
+  const s=window.speechSynthesis;
+  if(!s) return null;
+  const prefix=lang.slice(0,2).toLowerCase();
+  return s.getVoices().find(v=>v.lang.toLowerCase().replace("_","-").startsWith(prefix)) || null;
+}}
+function setIdle(){{
+  speaking=false;
+  btn.classList.remove("playing");
+  btn.setAttribute("aria-pressed","false");
+  btn.innerHTML="&#9654; " + playLbl;
+}}
+btn.onclick=()=>{{
+  const s=window.speechSynthesis;
+  if(!s){{ msg.textContent=nov; return; }}
+  if(speaking){{ s.cancel(); setIdle(); return; }}
+  s.cancel();
+  const u=new SpeechSynthesisUtterance(text);
+  u.lang=lang;
+  const v=findVoice();
+  if(v){{ u.voice=v; msg.textContent=""; }}
+  else {{ msg.textContent=nov; }}
+  u.onend=setIdle;
+  u.onerror=setIdle;
+  speaking=true;
+  btn.classList.add("playing");
+  btn.setAttribute("aria-pressed","true");
+  btn.innerHTML="&#9632; " + stopLbl;
+  s.speak(u);
+}};
+if(window.speechSynthesis && window.speechSynthesis.onvoiceschanged !== undefined){{
+  window.speechSynthesis.onvoiceschanged = ()=>{{ if(findVoice() && !speaking) msg.textContent=""; }};
+}}
+</script></body></html>"""
+    if hasattr(st, "iframe"):
+        st.iframe(html_doc, height=58)
+    else:
+        components.html(html_doc, height=58)
 
 
 @st.cache_resource
@@ -284,188 +170,789 @@ def get_validation_data():
     return d
 
 
-artifact = get_model_artifact()
-df = get_processed_data()
-df_val = get_validation_data()
-BASELINES = df[FEATURE_COLS].median()
-
-st.markdown(f"<div class='hero'><h1><span class='bug'>🦟</span> {t('title')}</h1><p>{t('subtitle')}</p></div>", unsafe_allow_html=True)
-
-
-st.sidebar.header(t("area"))
-selected_city = st.sidebar.selectbox(t("city"), sorted(df["city"].unique()), key="city", format_func=city_label)
-city_wards = sorted(df[df["city"] == selected_city]["ward_id"].unique())
-selected_ward = st.sidebar.selectbox(t("ward"), city_wards, key="ward", format_func=ward_label)
-
-ward_df = df[df["ward_id"] == selected_ward].dropna(subset=FEATURE_COLS).sort_values("date")
-issue_dates = (ward_df["date"] - 2 * WEEK).dt.strftime("%Y-%m-%d").tolist()
-issue_str = st.sidebar.selectbox(t("issue"), issue_dates, index=len(issue_dates) - 1, key="issue", format_func=D)
-issue_date = pd.Timestamp(issue_str)
-horizon = st.sidebar.radio(t("horizon"), list(HORIZONS), index=0, horizontal=True, key="hz",
-                          format_func=lambda h: D(h) + (" wk" if L == 0 else " সপ্তাহ"))
-base_row = ward_df[ward_df["date"] == issue_date + 2 * WEEK].iloc[0].copy()
-
-st.sidebar.info(t("info", t=issue_str, a=(issue_date + 2 * WEEK).date(), b=(issue_date + 3 * WEEK).date(), c=(issue_date + 4 * WEEK).date()))
-
-st.sidebar.markdown("---")
-st.sidebar.header(t("sim"))
-st.sidebar.caption(t("simcap"))
-sk = f"{selected_ward}_{issue_str}"
-sim_rain_2w = st.sidebar.slider(t("r1"), 0.0, 300.0, float(round(base_row["rainfall_lag_2w"], 1)), key="r1" + sk)
-sim_rain_3w = st.sidebar.slider(t("r2"), 0.0, 300.0, float(round(base_row["rainfall_lag_3w"], 1)), key="r2" + sk)
-sim_rain_4w = st.sidebar.slider(t("r3"), 0.0, 300.0, float(round(base_row["rainfall_lag_4w"], 1)), key="r3" + sk)
-sim_temp = st.sidebar.slider(t("temp"), 15.0, 38.0, float(round(base_row["temp_mean_2_4w"], 1)), key="tp" + sk)
-sim_humidity = st.sidebar.slider(t("hum"), 40.0, 100.0, float(round(base_row["humidity_mean_2_4w"], 1)), key="hu" + sk)
-
-row = {c: float(base_row[c]) for c in FEATURE_COLS}
-row.update(rainfall_lag_2w=sim_rain_2w, rainfall_lag_3w=sim_rain_3w, rainfall_lag_4w=sim_rain_4w,
-           temp_lag_2w=sim_temp, temp_lag_3w=sim_temp, temp_lag_4w=sim_temp,
-           humidity_lag_2w=sim_humidity, humidity_lag_3w=sim_humidity, humidity_lag_4w=sim_humidity)
-row = derive_features(row)
-X_input = pd.DataFrame([row])[FEATURE_COLS].astype("float32")
-
-forecasts = {}
-for h in HORIZONS:
-    mu = float(np.clip(artifact["models"][h].predict(X_input)[0], 0, None))
-    lo, hi = (float(v[0]) for v in predict_interval([mu], artifact["dispersion"][h]))
-    forecasts[h] = (mu, lo, hi, classify_risk_tier(mu))
-pred_cases, ci_low, ci_high, risk_tier = forecasts[horizon]
-
-tab1, tab2, tab3 = st.tabs([t("tab1"), t("tab2"), t("tab3")])
+def render_header():
+    with st.container(border=True, key="app-header"):
+        hdr_left, hdr_right = st.columns([3.3, 1.3], vertical_alignment="center")
+        with hdr_right:
+            lang_choice = st.segmented_control(
+                "ভাষা / Language",
+                ["বাংলা", "English"],
+                default="বাংলা",
+                key="lang",
+                on_change=_keep_lang,
+                label_visibility="collapsed",
+            )
+        if lang_choice not in ("বাংলা", "English"):
+            lang_choice = st.session_state.get("_last_lang", "বাংলা")
+        else:
+            st.session_state["_last_lang"] = lang_choice
+        lang = "en" if lang_choice == "English" else "bn"
+        with hdr_left:
+            auth.role_chip(lang)
+        # Full-width block (outside the columns) so the logo is truly centred.
+        st.markdown(
+            f"<div class='hdr-logo'>{LOGO_SVG}</div>"
+            f"<h1 class='hdr-title'>{t('title', lang)}</h1>"
+            f"<p class='hdr-sub'>{t('subtitle', lang)}</p>",
+            unsafe_allow_html=True,
+        )
+    return lang
 
 
-with tab1:
-    cols = st.columns(3)
-    for col, h in zip(cols, HORIZONS):
-        mu, lo, hi, tier = forecasts[h]
-        tdate = (issue_date + h * WEEK).date()
-        actual = df[(df["ward_id"] == selected_ward) & (df["date"] == issue_date + h * WEEK)]["dengue_cases"]
-        atxt = t("actual", n=int(actual.iloc[0])) if len(actual) and pd.notna(actual.iloc[0]) else t("future")
-        col.markdown(
-            f"<div class='fc' style='border-left:6px solid {TIER_COLORS[tier]};background:{TIER_COLORS[tier]}18'>"
-            f"<div class='fc-h'>{t('fc_title', h=h, d=tdate)}</div>"
-            f"<div class='fc-n'>{D(f'{mu:.1f}')} <span>{t('unit')}</span></div>"
-            f"<div class='fc-r'>{t('range')}: {D(f'{lo:.1f}')} – {D(f'{hi:.1f}')}</div>"
-            f"<div class='fc-a'>{atxt}</div>"
-            f"<span class='badge' style='background:{TIER_COLORS[tier]}'>{tier_name(tier)}</span></div>",
-            unsafe_allow_html=True)
-    st.markdown(f"<div class='act'><b>{t('act', h=horizon, tier=tier_name(risk_tier))}:</b> {TIER_ACTIONS[risk_tier][L]}</div>",
-                unsafe_allow_html=True)
+def render_step1(df, lang):
+    with st.container(border=True, key="step1-box"):
+        st.markdown(f"<div class='step-heading'>{t('step1', lang)}</div>", unsafe_allow_html=True)
+        c_city, c_ward, c_hz = st.columns([1.05, 1.25, 1.45], vertical_alignment="bottom")
+        cities = sorted(df["city"].unique())
+        selected_city = c_city.selectbox(
+            t("city", lang),
+            cities,
+            key="city",
+            format_func=lambda c: city_label(c, lang),
+        )
+        city_wards = sorted(df[df["city"] == selected_city]["ward_id"].unique())
+        selected_ward = c_ward.selectbox(
+            t("ward", lang),
+            city_wards,
+            key="ward",
+            format_func=lambda w: ward_label(w, lang),
+        )
+        horizon = c_hz.segmented_control(
+            t("horizon", lang),
+            list(HORIZONS),
+            default=2,
+            key="hz",
+            on_change=_keep_horizon,
+            format_func=lambda h: t("hz_opt", lang, h=h),
+        )
+        if horizon not in HORIZONS:
+            horizon = st.session_state.get("_last_hz", 2)
+        else:
+            st.session_state["_last_hz"] = horizon
 
-    speech = t("say", w=ward_label(selected_ward), h=horizon, n=f"{pred_cases:.0f}",
-               tier=tier_name(risk_tier), act=TIER_ACTIONS[risk_tier][L])
-    speak_button(speech, "en-US" if L == 0 else "bn-BD", t("listen"), t("novoice"))
+        ward_df = df[df["ward_id"] == selected_ward].dropna(subset=FEATURE_COLS).sort_values("date")
+        if ward_df.empty:
+            return selected_city, selected_ward, horizon, ward_df, None
 
-    with st.expander(t("plan_t", tier=tier_name(risk_tier), h=horizon), expanded=False):
-        po, pp = st.columns(2)
-        po.markdown(f"**{t('plan_o')}**\n\n" + "\n".join("- " + x for x in TIER_PLAN[risk_tier]["officers"][L]))
-        pp.markdown(f"**{t('plan_p')}**\n\n" + "\n".join("- " + x for x in TIER_PLAN[risk_tier]["public"][L]))
-        st.caption(t("plan_n"))
+        issue_dates = (ward_df["date"] - 2 * WEEK).dt.strftime("%Y-%m-%d").tolist()
+        if "issue" in st.session_state and st.session_state["issue"] not in issue_dates:
+            del st.session_state["issue"]
 
-    left, right = st.columns(2)
-    with left:
-        st.subheader(t("drv"))
-        eff = local_driver_effects(artifact["models"][horizon], row, BASELINES)
-        eff_df = pd.DataFrame({"Driver": [t(k) for k in eff], "Effect": list(eff.values())}).sort_values("Effect")
-        eff_df["Direction"] = np.where(eff_df["Effect"] >= 0, t("up"), t("down"))
-        fig = px.bar(eff_df, x="Effect", y="Driver", orientation="h", color="Direction",
-                     color_discrete_map={t("up"): "#b3261e", t("down"): "#2e7d32"},
-                     title=t("drv_t", w=ward_label(selected_ward), h=horizon))
-        fig.update_layout(height=380, xaxis_title=t("drv_x"), yaxis_title=None, legend_title_text=None,
-                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, width="stretch")
-        st.caption(t("drv_cap"))
-    with right:
-        st.subheader(t("hist"))
-        recent = ward_df[ward_df["date"] <= issue_date + 2 * WEEK].tail(52)
-        fig_h = go.Figure()
-        fig_h.add_trace(go.Bar(x=recent["date"], y=recent["rainfall_sum_2_4w"], name=t("hist_rain"),
-                               marker_color="rgba(70,130,180,0.40)", yaxis="y2"))
-        fig_h.add_trace(go.Scatter(x=recent["date"], y=recent["dengue_cases"], name=t("hist_cases"),
-                                   line=dict(color="#b3261e", width=2.5)))
-        fig_h.update_layout(yaxis=dict(title=t("hist_y")), yaxis2=dict(title=t("hist_y2"), overlaying="y", side="right"),
-                            legend=dict(orientation="h", y=1.12), height=380,
-                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig_h, width="stretch")
+        active_issue = st.session_state.get("issue", issue_dates[-1])
+        st.markdown(
+            f"<div class='weather-note'>{t('weather_note', lang, date=active_issue)}</div>",
+            unsafe_allow_html=True,
+        )
+        with st.expander(t("other_week_exp", lang), expanded=False):
+            issue_str = st.selectbox(
+                t("issue", lang),
+                issue_dates,
+                index=len(issue_dates) - 1,
+                key="issue",
+                format_func=lambda d: fmt_date(d, lang),
+            )
+    return selected_city, selected_ward, horizon, ward_df, issue_str
 
 
-with tab2:
-    st.subheader(t("hm_t", c=city_label(selected_city), h=horizon, d=issue_str))
+def compute_city_rank(artifact, df, selected_city, selected_ward, issue_date, horizon, current_mu):
+    city_slice = df[(df["city"] == selected_city) & (df["date"] == issue_date + 2 * WEEK)].dropna(subset=FEATURE_COLS)
+    if city_slice.empty:
+        return 1, 1
+    preds = np.clip(artifact["models"][horizon].predict(city_slice[FEATURE_COLS]), 0, None)
+    rank_df = pd.DataFrame({"ward_id": city_slice["ward_id"].values, "pred": preds})
+    rank_df.loc[rank_df["ward_id"] == selected_ward, "pred"] = current_mu
+    rank_df = rank_df.sort_values("pred", ascending=False).reset_index(drop=True)
+    matches = rank_df.index[rank_df["ward_id"] == selected_ward].tolist()
+    rank = (matches[0] + 1) if matches else 1
+    return rank, len(rank_df)
+
+
+def build_driver_chart(eff, lang):
+    rows = []
+    for raw_k, val in eff.items():
+        rows.append(
+            {
+                "Driver": driver_label(raw_k, lang),
+                "Effect": float(val),
+                "Direction": "up" if val >= 0 else "down",
+            }
+        )
+    eff_df = pd.DataFrame(rows).sort_values("Effect")
+
+    fig = go.Figure()
+    for direction, label_key, color, pattern in (
+        ("up", "drv_up", "#D55E00", "/"),
+        ("down", "drv_down", "#0072B2", "."),
+    ):
+        sub = eff_df[eff_df["Direction"] == direction]
+        fig.add_trace(
+            go.Bar(
+                x=sub["Effect"],
+                y=sub["Driver"],
+                orientation="h",
+                name=t(label_key, lang),
+                marker=dict(color=color, pattern=dict(shape=pattern, solidity=0.65)),
+                hovertemplate="%{y}: %{x:+.1f}<extra>" + t(label_key, lang) + "</extra>",
+            )
+        )
+    fig.add_vline(x=0, line_width=1.5, line_color=TOKENS["border"])
+    fig.update_layout(
+        title=dict(text=t("drv_title", lang), font=dict(size=16, color=TOKENS["text"])),
+        barmode="relative",
+        height=360,
+        margin=dict(l=10, r=16, t=54, b=40),
+        xaxis=dict(title=t("drv_x", lang), tickfont=dict(size=13)),
+        yaxis=dict(title=None, tickfont=dict(size=13), categoryorder="array", categoryarray=eff_df["Driver"].tolist()),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=13)),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="#FFFFFF",
+        font=dict(size=13, color=TOKENS["text"]),
+    )
+    return fig, eff_df
+
+
+def build_history_chart(recent, lang):
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.12,
+        row_heights=[0.42, 0.58],
+    )
+    fig.add_trace(
+        go.Bar(
+            x=recent["date"],
+            y=recent["rainfall_sum_2_4w"],
+            name=t("hist_rain", lang),
+            marker_color="#0072B2",
+            hovertemplate="%{x|%Y-%m-%d}: %{y:.1f}<extra>" + t("hist_rain", lang) + "</extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=recent["date"],
+            y=recent["dengue_cases"],
+            name=t("hist_cases", lang),
+            mode="lines",
+            line=dict(color="#D55E00", width=2.8),
+            fill="tozeroy",
+            fillcolor="rgba(213, 94, 0, 0.12)",
+            hovertemplate="%{x|%Y-%m-%d}: %{y:.1f}<extra>" + t("hist_cases", lang) + "</extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    fig.update_yaxes(title_text=t("hist_rain", lang), tickfont=dict(size=12), row=1, col=1)
+    fig.update_yaxes(title_text=t("hist_cases", lang), tickfont=dict(size=12), row=2, col=1)
+    fig.update_xaxes(tickfont=dict(size=12), row=2, col=1)
+    fig.update_layout(
+        title=dict(text=t("hist_title", lang), font=dict(size=16, color=TOKENS["text"])),
+        height=430,
+        margin=dict(l=12, r=16, t=64, b=36),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=13)),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="#FFFFFF",
+        font=dict(size=13, color=TOKENS["text"]),
+    )
+    return fig
+
+
+def render_forecast_tab(
+    artifact, df, ward_df, selected_city, selected_ward, issue_date, issue_str, horizon,
+    base_row, row, forecasts, defaults, sk, is_scenario, baselines, lang,
+):
+    pred_cases, ci_low, ci_high, risk_tier = forecasts[horizon]
+    tdate = (issue_date + horizon * WEEK).date()
+    ts = TIER_STYLES[risk_tier]
+    w_name = ward_label(selected_ward, lang)
+    c_name = city_label(selected_city, lang)
+
+    if is_scenario:
+        st.markdown(f"<div class='scenario-banner'>{t('scenario_badge', lang)}</div>", unsafe_allow_html=True)
+
+    main_col, side_col = st.columns([2.25, 1.0], gap="medium")
+    with main_col:
+        actual = df[(df["ward_id"] == selected_ward) & (df["date"] == issue_date + horizon * WEEK)]["dengue_cases"]
+        if len(actual) and pd.notna(actual.iloc[0]):
+            obs_txt = t("actual_past", lang, n=int(actual.iloc[0]))
+        else:
+            obs_txt = t("future_week", lang)
+
+        rank, total = compute_city_rank(artifact, df, selected_city, selected_ward, issue_date, horizon, pred_cases)
+        if pred_cases < 0.5 or rank > max(1, total // 2):
+            ctx_txt = t("city_ctx_low", lang, city=c_name, rank=rank, total=total)
+        else:
+            ctx_txt = t("city_ctx_high", lang, city=c_name, rank=rank, total=total)
+
+        few_html = f"<div class='fc-note'>{t('very_few', lang)}</div>" if pred_cases < 0.5 else ""
+        st.markdown(
+            f"<div class='fc-primary' style='background:{ts['bg']};color:{ts['fg']};border-color:{ts['border']}'>"
+            f"<div class='fc-meta'>{t('fc_for_week', lang, d=tdate, h=horizon)} · {w_name}</div>"
+            f"<div class='fc-risk-row'>{ts['icon']}<span>{tier_name(risk_tier, lang)}</span></div>"
+            f"<p class='fc-sentence'>{t('main_sentence', lang, ward=w_name, d=tdate, risk=tier_name(risk_tier, lang))}</p>"
+            f"<div class='fc-stats'>"
+            f"<span class='fc-cases'>{t('expected_cases', lang, n=f'{pred_cases:.1f}')}</span>"
+            f"<span class='fc-range'>{t('range_line', lang, a=f'{ci_low:.1f}', b=f'{ci_high:.1f}')}</span>"
+            f"</div>"
+            f"{few_html}"
+            f"<div class='fc-note'>{t('uncertainty', lang)}</div>"
+            f"<div class='fc-note'>{obs_txt} · {ctx_txt}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        with st.expander(t("learn_more", lang), expanded=False):
+            st.write(t("learn_more_body", lang))
+
+    with side_col:
+        st.markdown(f"**{t('other_horizons', lang)}**")
+        for h in HORIZONS:
+            if h == horizon:
+                continue
+            mu_s, _, _, tier_s = forecasts[h]
+            dt_s = (issue_date + h * WEEK).date()
+            badge_s = risk_badge_html(tier_s, tier_name(tier_s, lang), compact=True)
+            st.markdown(
+                f"<div class='fc-secondary'>"
+                f"<div class='fc-sec-date'>{t('fc_for_week', lang, d=dt_s, h=h)}</div>"
+                f"{badge_s}"
+                f"<div class='fc-sec-num'>{fmt_num(mu_s, lang, 1)} {t('unit_cases_week', lang)}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            st.button(
+                t("select_horizon_btn", lang, h=h),
+                key=f"pick_hz_{h}",
+                on_click=_select_horizon,
+                args=(h,),
+                width="stretch",
+            )
+
+    # Prominent "What to do now" card directly under main forecast
+    resident_bullets = TIER_PLAN[risk_tier]["public"][lang][:3]
+    officer_bullets = TIER_PLAN[risk_tier]["officers"][lang][:3]
+    bullets_html = "".join(f"<li>{html_lib.escape(b)}</li>" for b in resident_bullets)
+    st.markdown(
+        f"<div class='action-card' style='background:{ts['bg']};color:{ts['fg']};border-color:{ts['border']}'>"
+        f"<h3>{ts['icon']}<span>{t('action_title', lang)} — {tier_name(risk_tier, lang)}</span></h3>"
+        f"<ul>{bullets_html}</ul>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    speech_text = t(
+        "say",
+        lang,
+        w=w_name,
+        d=tdate,
+        risk=tier_name(risk_tier, lang),
+        n=f"{pred_cases:.1f}",
+        acts=" ".join(resident_bullets),
+    )
+    speak_button(
+        speech_text,
+        "en-US" if lang == "en" else "bn-BD",
+        t("listen", lang),
+        t("stop", lang),
+        t("novoice", lang),
+        widget_id="main",
+    )
+
+    with st.expander(t("full_plan", lang), expanded=False):
+        p_res, p_off = st.tabs([t("tab_residents", lang), t("tab_officers", lang)])
+        with p_res:
+            st.markdown("\n".join(f"- {b}" for b in resident_bullets))
+        with p_off:
+            st.markdown("\n".join(f"- {b}" for b in officer_bullets))
+        st.caption(t("plan_note", lang))
+
+    if not auth.is_admin():
+        return None
+    with st.expander(t("exp_scenario", lang), expanded=False):
+        st.caption(t("scen_cap", lang))
+        sc1, sc2 = st.columns(2)
+        sc1.slider(t("r1", lang), 0.0, 300.0, defaults["r1"], key="r1" + sk)
+        sc1.slider(t("r2", lang), 0.0, 300.0, defaults["r2"], key="r2" + sk)
+        sc1.slider(t("r3", lang), 0.0, 300.0, defaults["r3"], key="r3" + sk)
+        sc2.slider(t("temp", lang), 15.0, 38.0, defaults["tp"], key="tp" + sk)
+        sc2.slider(t("hum", lang), 40.0, 100.0, defaults["hu"], key="hu" + sk)
+        st.button(
+            t("reset_weather", lang),
+            key="reset_" + sk,
+            on_click=_reset_weather,
+            args=(sk, defaults),
+        )
+
+    return None
+
+
+def render_drivers_page(artifact, ward_df, issue_date, eff, lang):
+    st.subheader(t("exp_why", lang))
+    fig_drv, eff_df = build_driver_chart(eff, lang)
+    top_pos = eff_df.sort_values("Effect", ascending=False).iloc[0]
+    top_neg = eff_df.sort_values("Effect", ascending=True).iloc[0]
+    if top_pos["Effect"] > 0.05:
+        drv_takeaway = t("drv_takeaway_up", lang, top=top_pos["Driver"])
+    elif top_neg["Effect"] < -0.05:
+        drv_takeaway = t("drv_takeaway_down", lang, top=top_neg["Driver"])
+    else:
+        drv_takeaway = t("drv_takeaway_flat", lang)
+    st.markdown(f"<div class='takeaway-line'>{drv_takeaway}</div>", unsafe_allow_html=True)
+    st.plotly_chart(fig_drv, width="stretch", config=PLOTLY_CONFIG)
+
+    st.subheader(t("exp_history", lang))
+    recent = ward_df[ward_df["date"] <= issue_date + 2 * WEEK].tail(52)
+    if not recent.empty:
+        max_idx = recent["dengue_cases"].idxmax()
+        max_c = int(round(recent.loc[max_idx, "dengue_cases"])) if pd.notna(max_idx) else 0
+        max_c_date = recent.loc[max_idx, "date"].strftime("%Y-%m-%d") if pd.notna(max_idx) else str(issue_date.date())
+        max_r = f"{recent['rainfall_sum_2_4w'].max():.1f}"
+        st.markdown(
+            f"<div class='takeaway-line'>{t('hist_takeaway', lang, max_c=max_c, max_c_date=max_c_date, max_r=max_r)}</div>",
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(build_history_chart(recent, lang), width="stretch", config=PLOTLY_CONFIG)
+
+
+def render_all_wards_tab(artifact, df, selected_city, issue_date, horizon, lang):
+    st.subheader(t("hm_title", lang, city=city_label(selected_city, lang), h=horizon))
     start = issue_date + 2 * WEEK - 11 * WEEK
-    cs = df[(df["city"] == selected_city) & (df["date"] >= start) & (df["date"] <= issue_date + 2 * WEEK)].dropna(subset=FEATURE_COLS).copy()
-    if not cs.empty:
-        mdl, disp = artifact["models"][horizon], artifact["dispersion"][horizon]
-        cs["Predicted_Cases"] = np.clip(mdl.predict(cs[FEATURE_COLS]), 0, None)
-        cs["Target_Week"] = (cs["date"] + (horizon - 2) * WEEK).dt.strftime("%Y-%m-%d")
-        piv = cs.pivot(index="ward_id", columns="Target_Week", values="Predicted_Cases")
-        piv = piv.loc[piv.iloc[:, -1].sort_values(ascending=False).index]
-        fig_hm = px.imshow(piv, aspect="auto", color_continuous_scale="YlOrRd",
-                           labels=dict(x=t("hm_x"), y=t("hm_y"), color=t("hm_c")))
-        fig_hm.update_layout(paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig_hm, width="stretch")
-        latest = cs[cs["date"] == issue_date + 2 * WEEK].copy()
-        latest["CI_Low"], latest["CI_High"] = predict_interval(latest["Predicted_Cases"], disp)
-        latest["Risk_Tier"] = latest["Predicted_Cases"].apply(lambda v: tier_name(classify_risk_tier(v)))
-        latest = latest.sort_values("Predicted_Cases", ascending=False)
-        st.markdown(f"**{t('pri', d=(issue_date + horizon * WEEK).date())}**")
-        tbl = latest[["ward_id", "Predicted_Cases", "CI_Low", "CI_High", "Risk_Tier", "rainfall_sum_2_4w",
-                      "water_logging_risk_index", "population_density_sqkm"]].round(2)
-        tbl.iloc[:, 0] = tbl.iloc[:, 0].map(ward_label)
-        tbl.columns = [t(k) for k in ("c_ward", "c_pred", "c_lo", "c_hi", "c_tier", "c_rain", "c_wl", "c_pop")]
-        if L == 1:
-            for c in tbl.columns:
-                if c not in (t("c_ward"), t("c_tier")):
-                    tbl[c] = tbl[c].map(lambda v: D(f"{v:.2f}"))
-        st.dataframe(tbl, width="stretch", hide_index=True)
-        st.caption(t("hm_cap"))
+    cs = df[
+        (df["city"] == selected_city) & (df["date"] >= start) & (df["date"] <= issue_date + 2 * WEEK)
+    ].dropna(subset=FEATURE_COLS).copy()
+    if cs.empty:
+        st.info(t("no_data", lang))
+        return
+
+    mdl, disp = artifact["models"][horizon], artifact["dispersion"][horizon]
+    cs["Predicted_Cases"] = np.clip(mdl.predict(cs[FEATURE_COLS]), 0, None)
+    cs["Target_Week"] = (cs["date"] + (horizon - 2) * WEEK).dt.strftime("%Y-%m-%d")
+
+    latest = cs[cs["date"] == issue_date + 2 * WEEK].copy()
+    latest["CI_Low"], latest["CI_High"] = predict_interval(latest["Predicted_Cases"], disp)
+    latest["Risk_Tier"] = latest["Predicted_Cases"].apply(classify_risk_tier)
+    latest = latest.sort_values("Predicted_Cases", ascending=False).reset_index(drop=True)
+    latest["Priority_Rank"] = np.arange(1, len(latest) + 1)
+
+    top_ward_name = ward_label(latest.iloc[0]["ward_id"], lang)
+    st.markdown(
+        f"<div class='takeaway-line'>{t('hm_takeaway', lang, top_ward=top_ward_name)}</div>",
+        unsafe_allow_html=True,
+    )
+
+    piv = cs.pivot(index="ward_id", columns="Target_Week", values="Predicted_Cases")
+    piv = piv.loc[piv.iloc[:, -1].sort_values(ascending=False).index]
+    friendly_y = [ward_label(w, lang) for w in piv.index]
+    piv_display = piv.copy()
+    piv_display.index = friendly_y
+
+    colorscale = [[0.0, "#F3F6F4"], [0.25, "#F6D55C"], [0.6, "#D95F02"], [1.0, "#7A0C1E"]]
+    fig_hm = px.imshow(
+        piv_display,
+        aspect="auto",
+        color_continuous_scale=colorscale,
+        labels=dict(x=t("hm_x", lang), y=t("hm_y", lang), color=t("hm_c", lang)),
+    )
+    fig_hm.update_traces(
+        hovertemplate="%{y}<br>%{x}: %{z:.1f} " + t("hm_c", lang) + "<extra></extra>"
+    )
+    fig_hm.update_layout(
+        height=max(360, 26 * len(piv_display.index)),
+        margin=dict(l=12, r=12, t=20, b=40),
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=13, color=TOKENS["text"]),
+    )
+    fig_hm.update_xaxes(tickfont=dict(size=12))
+    fig_hm.update_yaxes(tickfont=dict(size=12))
+    st.plotly_chart(fig_hm, width="stretch", config=PLOTLY_CONFIG)
+
+    st.markdown(f"**{t('pri_title', lang, d=(issue_date + horizon * WEEK).date())}**")
+    sort_options = ["risk", "ward", "rain", "wl"]
+    sort_labels = {
+        "risk": t("sort_risk", lang),
+        "ward": t("sort_ward", lang),
+        "rain": t("sort_rain", lang),
+        "wl": t("sort_wl", lang),
+    }
+    sort_by = st.selectbox(
+        t("sort_label", lang),
+        sort_options,
+        key="ward_sort",
+        format_func=lambda k: sort_labels[k],
+    )
+    if sort_by == "ward":
+        latest_view = latest.sort_values("ward_id", ascending=True)
+    elif sort_by == "rain":
+        latest_view = latest.sort_values("rainfall_sum_2_4w", ascending=False)
+    elif sort_by == "wl":
+        latest_view = latest.sort_values("water_logging_risk_index", ascending=False)
+    else:
+        latest_view = latest
+
+    headers = [t(k, lang) for k in ("c_ward", "c_risk", "c_pred", "c_range", "c_rain", "c_wl", "c_pop")]
+    th_html = "".join(f"<th>{html_lib.escape(h_txt)}</th>" for h_txt in headers)
+    rows_html = []
+    for _, r in latest_view.iterrows():
+        rank = int(r["Priority_Rank"])
+        is_top5 = rank <= 5
+        row_cls = " class='top5-row'" if is_top5 else ""
+        rank_badge = f"<span class='rank-tag'>{t('top5_tag', lang, n=rank)}</span>" if is_top5 else ""
+        w_txt = html_lib.escape(ward_label(r["ward_id"], lang))
+        badge = risk_badge_html(r["Risk_Tier"], tier_name(r["Risk_Tier"], lang), compact=True)
+        pred_txt = fmt_num(r["Predicted_Cases"], lang, 1)
+        rng_txt = f"{fmt_num(r['CI_Low'], lang, 1)} – {fmt_num(r['CI_High'], lang, 1)}"
+        rain_txt = fmt_num(r["rainfall_sum_2_4w"], lang, 1)
+        wl_txt = fmt_num(r["water_logging_risk_index"], lang, 2)
+        pop_txt = fmt_num(round(r["population_density_sqkm"]), lang, 0)
+        rows_html.append(
+            f"<tr{row_cls}>"
+            f"<td>{rank_badge}<strong>{w_txt}</strong></td>"
+            f"<td>{badge}</td>"
+            f"<td>{pred_txt}</td>"
+            f"<td>{rng_txt}</td>"
+            f"<td>{rain_txt}</td>"
+            f"<td>{wl_txt}</td>"
+            f"<td>{pop_txt}</td>"
+            f"</tr>"
+        )
+    st.markdown(
+        f"<div class='table-scroll'><table class='pri-table'>"
+        f"<thead><tr>{th_html}</tr></thead>"
+        f"<tbody>{''.join(rows_html)}</tbody>"
+        f"</table></div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(t("hm_cap", lang))
 
 
-with tab3:
-    st.subheader(t("val_h"))
-    vh = st.selectbox(t("val_sel"), list(HORIZONS), index=list(HORIZONS).index(horizon), key="vh",
-                      format_func=lambda h: D(h) + (" wk" if L == 0 else " সপ্তাহ"))
-    st.caption(t("val_cap", tr=artifact["train_range"][vh].replace(" to ", t("to")), te=artifact["test_range"][vh].replace(" to ", t("to")),
-                 c1=artifact["ci_coverage"][vh][1], c0=artifact["ci_coverage"][vh][0]))
-    bm = pd.DataFrame(artifact["benchmarks"][vh]).T.reset_index()
-    bm["index"] = bm["index"].map(lambda n: t("m_ridge") if n.startswith("Ridge") else t("m_hgb"))
-    bm = bm.rename(columns={"index": t("model"), "MAE": t("col_mae"), "RMSE": t("col_rmse"), "R2": t("col_r2"),
-                            "Tier_Accuracy_Pct": t("col_acc")})
-    if L == 1:
-        for c in bm.columns[1:]:
-            bm[c] = bm[c].map(lambda v: D(f"{v:.4g}" if v < 10 else f"{v:.2f}"))
-    st.dataframe(bm, width="stretch", hide_index=True)
-
-    vw = df_val[(df_val["ward_id"] == selected_ward) & (df_val["horizon_weeks"] == vh)].sort_values("date")
-    err = vw["dengue_cases"] - vw["predicted_cases"]
-    gap = abs(artifact["test_mae"][vh] - artifact["train_mae"][vh])
-    m1, m2, m3 = st.columns(3)
-    m1.metric(t("mae", w=ward_label(selected_ward)), D(f"{np.mean(np.abs(err)):.2f}") + " " + t("cw"))
-    m2.metric(t("rmse", w=ward_label(selected_ward)), D(f"{np.sqrt(np.mean(err ** 2)):.2f}") + " " + t("cw"))
-    m3.metric(t("gap"), D(f"{gap:.3f}"))
-    m3.caption(t("lowof") if gap < 0.15 else t("chkof"))
+def render_accuracy_tab(artifact, df_val, selected_ward, horizon, lang):
+    st.subheader(t("acc_title", lang))
+    vh = st.selectbox(
+        t("acc_sel", lang),
+        list(HORIZONS),
+        index=list(HORIZONS).index(horizon),
+        key="vh",
+        format_func=lambda h: t("hz_opt", lang, h=h),
+    )
 
     tr = artifact["tier_report"][vh]
-    names = [tier_name(x) for x in tr["labels"]]
-    c1, c2 = st.columns([3, 2])
-    with c1:
-        fig_cm = px.imshow(tr["cm"], x=names, y=names, text_auto=True, color_continuous_scale="Greens",
-                           labels=dict(x=t("cm_x"), y=t("cm_y"), color=t("cm_c")), title=t("cm_t"))
-        fig_cm.update_layout(paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig_cm, width="stretch")
-    with c2:
-        st.markdown(f"**{t('rec_h')}**")
-        st.dataframe(pd.DataFrame({t("c_tier"): names, t("rec_a"): [D(tr["recall"][x]) for x in TIERS],
-                                   t("rec_b"): [D(tr["actual_share"][x]) for x in TIERS]}), hide_index=True)
-        st.metric(t("al_r"), D(f"{tr['alert_recall']}%"))
-        st.metric(t("al_p"), D(f"{tr['alert_precision']}%"))
-        st.caption(t("al_cap"))
+    test_mae_all = artifact["test_mae"][vh]
 
-    fig_v = go.Figure()
-    fig_v.add_trace(go.Scatter(x=vw["date"], y=vw["ci_high"], mode="lines", line=dict(width=0), showlegend=False))
-    fig_v.add_trace(go.Scatter(x=vw["date"], y=vw["ci_low"], mode="lines", line=dict(width=0), fill="tonexty",
-                               fillcolor="rgba(224,123,0,0.18)", name=t("av_int")))
-    fig_v.add_trace(go.Scatter(x=vw["date"], y=vw["dengue_cases"], name=t("av_a"), line=dict(color="#1b5e3a", width=2)))
-    fig_v.add_trace(go.Scatter(x=vw["date"], y=vw["predicted_cases"], name=t("av_p"), line=dict(color="#e07b00", width=2, dash="dash")))
-    fig_v.update_layout(title=t("av_t", h=vh, w=ward_label(selected_ward)), height=420, xaxis_title=t("av_x"), yaxis_title=t("av_y"),
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig_v, width="stretch")
+    c1, c2, c3 = st.columns(3)
+    c1.markdown(
+        f"<div class='trust-card'><div class='trust-lbl'>{t('acc_card_err', lang)}</div>"
+        f"<div class='trust-val'>{t('acc_card_err_val', lang, x=f'{test_mae_all:.2f}')}</div></div>",
+        unsafe_allow_html=True,
+    )
+    c2.markdown(
+        f"<div class='trust-card'><div class='trust-lbl'>{t('acc_card_caught', lang)}</div>"
+        f"<div class='trust-val'>{fmt_num(tr['alert_recall'], lang, 1)}%</div></div>",
+        unsafe_allow_html=True,
+    )
+    c3.markdown(
+        f"<div class='trust-card'><div class='trust-lbl'>{t('acc_card_prec', lang)}</div>"
+        f"<div class='trust-val'>{fmt_num(tr['alert_precision'], lang, 1)}%</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(f"<div class='takeaway-line'>{t('acc_caveat', lang)}</div>", unsafe_allow_html=True)
+    st.caption(
+        t(
+            "acc_cov",
+            lang,
+            tr=artifact["train_range"][vh].replace(" to ", t("to", lang)),
+            te=artifact["test_range"][vh].replace(" to ", t("to", lang)),
+            c1=artifact["ci_coverage"][vh][1],
+            c0=artifact["ci_coverage"][vh][0],
+        )
+    )
+
+    with st.expander(t("acc_expert", lang), expanded=False):
+        st.markdown(f"**{t('acc_bm_title', lang)}**")
+        bm = pd.DataFrame(artifact["benchmarks"][vh]).T.reset_index()
+        bm["index"] = bm["index"].map(lambda n: t("m_ridge", lang) if n.startswith("Ridge") else t("m_hgb", lang))
+        bm = bm.rename(
+            columns={
+                "index": t("model", lang),
+                "MAE": t("col_mae", lang),
+                "RMSE": t("col_rmse", lang),
+                "R2": t("col_r2", lang),
+                "Tier_Accuracy_Pct": t("col_acc", lang),
+            }
+        )
+        if lang == "bn":
+            for col in bm.columns[1:]:
+                bm[col] = bm[col].map(lambda v: to_bn_digits(f"{v:.4g}" if v < 10 else f"{v:.2f}"))
+        st.dataframe(bm, width="stretch", hide_index=True)
+
+        vw = df_val[(df_val["ward_id"] == selected_ward) & (df_val["horizon_weeks"] == vh)].sort_values("date")
+        if not vw.empty:
+            err = vw["dengue_cases"] - vw["predicted_cases"]
+            gap = abs(artifact["test_mae"][vh] - artifact["train_mae"][vh])
+            m1, m2, m3 = st.columns(3)
+            m1.metric(
+                t("ward_mae", lang, w=ward_label(selected_ward, lang)),
+                f"{fmt_num(np.mean(np.abs(err)), lang, 2)} {t('unit_cases_week', lang)}",
+            )
+            m2.metric(
+                t("ward_rmse", lang, w=ward_label(selected_ward, lang)),
+                f"{fmt_num(np.sqrt(np.mean(err ** 2)), lang, 2)} {t('unit_cases_week', lang)}",
+            )
+            m3.metric(t("gap_lbl", lang), fmt_num(gap, lang, 3))
+            m3.caption(t("lowof", lang) if gap < 0.15 else t("chkof", lang))
+
+        names = [tier_name(x, lang, short=True) for x in tr["labels"]]
+        cm_col, rec_col = st.columns([3, 2])
+        with cm_col:
+            fig_cm = px.imshow(
+                tr["cm"],
+                x=names,
+                y=names,
+                text_auto=True,
+                color_continuous_scale="Greens",
+                labels=dict(x=t("cm_x", lang), y=t("cm_y", lang), color=t("cm_c", lang)),
+                title=t("cm_t", lang),
+            )
+            fig_cm.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(size=13, color=TOKENS["text"]),
+                margin=dict(l=10, r=10, t=44, b=30),
+            )
+            st.plotly_chart(fig_cm, width="stretch", config=PLOTLY_CONFIG)
+        with rec_col:
+            st.markdown(f"**{t('rec_h', lang)}**")
+            rec_df = pd.DataFrame(
+                {
+                    t("c_risk", lang): names,
+                    t("rec_a", lang): [fmt_num(tr["recall"][x], lang, 1) for x in TIERS],
+                    t("rec_b", lang): [fmt_num(tr["actual_share"][x], lang, 1) for x in TIERS],
+                }
+            )
+            st.dataframe(rec_df, width="stretch", hide_index=True)
+
+        if not vw.empty:
+            fig_v = go.Figure()
+            fig_v.add_trace(go.Scatter(x=vw["date"], y=vw["ci_high"], mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip"))
+            fig_v.add_trace(
+                go.Scatter(
+                    x=vw["date"],
+                    y=vw["ci_low"],
+                    mode="lines",
+                    line=dict(width=0),
+                    fill="tonexty",
+                    fillcolor="rgba(213, 94, 0, 0.16)",
+                    name=t("av_int", lang),
+                    hoverinfo="skip",
+                )
+            )
+            fig_v.add_trace(
+                go.Scatter(
+                    x=vw["date"],
+                    y=vw["dengue_cases"],
+                    name=t("av_a", lang),
+                    line=dict(color="#0072B2", width=2.2),
+                    hovertemplate="%{x|%Y-%m-%d}: %{y:.1f}<extra>" + t("av_a", lang) + "</extra>",
+                )
+            )
+            fig_v.add_trace(
+                go.Scatter(
+                    x=vw["date"],
+                    y=vw["predicted_cases"],
+                    name=t("av_p", lang),
+                    line=dict(color="#D55E00", width=2.2, dash="dash"),
+                    hovertemplate="%{x|%Y-%m-%d}: %{y:.1f}<extra>" + t("av_p", lang) + "</extra>",
+                )
+            )
+            fig_v.update_layout(
+                title=dict(
+                    text=t("av_t", lang, h=vh, w=ward_label(selected_ward, lang)),
+                    font=dict(size=15, color=TOKENS["text"]),
+                ),
+                height=420,
+                xaxis_title=t("av_x", lang),
+                yaxis_title=t("av_y", lang),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=13)),
+                margin=dict(l=12, r=12, t=64, b=36),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="#FFFFFF",
+                font=dict(size=13, color=TOKENS["text"]),
+            )
+            st.plotly_chart(fig_v, width="stretch", config=PLOTLY_CONFIG)
+
+
+def render_help_guide(selected_ward, issue_date, issue_str, horizon, forecasts, eff, lang):
+    st.markdown(f"### {t('help_title', lang)}")
+    b1, b2, b3 = st.columns(3)
+    b1.button(t("help_q1", lang), key="help_btn_1", on_click=_set_help, args=("q1",), width="stretch")
+    b2.button(t("help_q2", lang), key="help_btn_2", on_click=_set_help, args=("q2",), width="stretch")
+    b3.button(t("help_q3", lang), key="help_btn_3", on_click=_set_help, args=("q3",), width="stretch")
+
+    topic = st.session_state.get("help_topic")
+    if not topic or forecasts is None:
+        return
+
+    pred_cases, ci_low, ci_high, risk_tier = forecasts[horizon]
+    tdate = (issue_date + horizon * WEEK).date()
+    w_name = ward_label(selected_ward, lang)
+    r_name = tier_name(risk_tier, lang)
+    bullets = TIER_PLAN[risk_tier]["public"][lang]
+
+    if topic == "q1":
+        ans = t("help_a1", lang, ward=w_name, d=tdate, risk=r_name, n=f"{pred_cases:.1f}", a=f"{ci_low:.1f}", b=f"{ci_high:.1f}")
+    elif topic == "q2":
+        ans = t("help_a2", lang, risk=r_name, p1=bullets[0], p2=bullets[1], p3=bullets[2])
+    else:
+        top_raw = max(eff.items(), key=lambda kv: abs(kv[1]))[0]
+        ans = t("help_a3", lang, issue_d=issue_str, top_drv=driver_label(top_raw, lang))
+
+    ans_plain = ans.replace("**", "")
+    st.markdown(f"<div class='help-answer'>{ans}</div>", unsafe_allow_html=True)
+    speak_button(
+        ans_plain,
+        "en-US" if lang == "en" else "bn-BD",
+        t("listen", lang),
+        t("stop", lang),
+        t("novoice", lang),
+        widget_id="help",
+    )
+
+
+def render_footer(lang, latest_date):
+    st.markdown(
+        f"<div class='app-footer'>"
+        f"<p><strong>{t('disclaimer', lang)}</strong></p>"
+        f"<p>{t('footer_meta', lang, date=fmt_date(latest_date, lang))}</p>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def main():
+    lang_initial = _active_lang()
+    st.markdown(build_css(lang_initial), unsafe_allow_html=True)
+    lang = render_header()
+    if lang != lang_initial:
+        st.markdown(build_css(lang), unsafe_allow_html=True)
+
+    try:
+        with st.spinner(t("loading", lang)):
+            artifact = get_model_artifact()
+            df = get_processed_data()
+            df_val = get_validation_data()
+            baselines = df[FEATURE_COLS].median()
+    except Exception:
+        st.error(t("error", lang))
+        return
+
+    selected_city, selected_ward, horizon, ward_df, issue_str = render_step1(df, lang)
+    latest_date = str(df["date"].max().date()) if not df.empty else "2025-12-29"
+
+    if ward_df.empty or issue_str is None:
+        st.warning(t("no_data", lang))
+        render_footer(lang, latest_date)
+        return
+
+    issue_date = pd.Timestamp(issue_str)
+    base_matches = ward_df[ward_df["date"] == issue_date + 2 * WEEK]
+    if base_matches.empty:
+        st.warning(t("no_data", lang))
+        render_footer(lang, latest_date)
+        return
+    base_row = base_matches.iloc[0].copy()
+
+    sk = f"{selected_ward}_{issue_str}"
+    defaults = {
+        "r1": float(round(base_row["rainfall_lag_2w"], 1)),
+        "r2": float(round(base_row["rainfall_lag_3w"], 1)),
+        "r3": float(round(base_row["rainfall_lag_4w"], 1)),
+        "tp": float(round(base_row["temp_mean_2_4w"], 1)),
+        "hu": float(round(base_row["humidity_mean_2_4w"], 1)),
+    }
+    sim_r1 = st.session_state.get("r1" + sk, defaults["r1"])
+    sim_r2 = st.session_state.get("r2" + sk, defaults["r2"])
+    sim_r3 = st.session_state.get("r3" + sk, defaults["r3"])
+    sim_tp = st.session_state.get("tp" + sk, defaults["tp"])
+    sim_hu = st.session_state.get("hu" + sk, defaults["hu"])
+    is_scenario = any(
+        abs(val - defaults[k]) > 1e-6
+        for k, val in (("r1", sim_r1), ("r2", sim_r2), ("r3", sim_r3), ("tp", sim_tp), ("hu", sim_hu))
+    )
+
+    row = {c: float(base_row[c]) for c in FEATURE_COLS}
+    row.update(
+        rainfall_lag_2w=sim_r1,
+        rainfall_lag_3w=sim_r2,
+        rainfall_lag_4w=sim_r3,
+        temp_lag_2w=sim_tp,
+        temp_lag_3w=sim_tp,
+        temp_lag_4w=sim_tp,
+        humidity_lag_2w=sim_hu,
+        humidity_lag_3w=sim_hu,
+        humidity_lag_4w=sim_hu,
+    )
+    row = derive_features(row)
+    X_input = pd.DataFrame([row])[FEATURE_COLS].astype("float32")
+
+    forecasts = {}
+    for h in HORIZONS:
+        mu = float(np.clip(artifact["models"][h].predict(X_input)[0], 0, None))
+        lo, hi = (float(v[0]) for v in predict_interval([mu], artifact["dispersion"][h]))
+        forecasts[h] = (mu, lo, hi, classify_risk_tier(mu))
+
+    eff = local_driver_effects(artifact["models"][horizon], row, baselines)
+
+    def page_forecast():
+        render_forecast_tab(
+            artifact, df, ward_df, selected_city, selected_ward, issue_date, issue_str,
+            horizon, base_row, row, forecasts, defaults, sk, is_scenario, baselines, lang,
+        )
+
+    def page_drivers():
+        render_drivers_page(artifact, ward_df, issue_date, eff, lang)
+
+    def page_wards():
+        render_all_wards_tab(artifact, df, selected_city, issue_date, horizon, lang)
+
+    def page_ops():
+        render_operations_page(artifact, df, selected_city, issue_date, horizon, lang)
+
+    def page_login():
+        auth.login_page(lang)
+
+    def page_resources():
+        render_resources_page(artifact, df, issue_date, horizon, lang)
+
+    def page_beds():
+        render_beds_page(artifact, df, issue_date, horizon, lang)
+
+    def page_whatif():
+        render_whatif_page(artifact, df, issue_date, horizon, lang)
+
+    def page_dispatch():
+        render_dispatch_page(artifact, df, issue_date, horizon, lang)
+
+    def page_accuracy():
+        render_accuracy_tab(artifact, df_val, selected_ward, horizon, lang)
+
+    pages = [
+        st.Page(page_forecast, title=t("tab_forecast", lang), icon="📈", url_path="forecast", default=True),
+        st.Page(page_drivers,  title=t("exp_why", lang),      icon="🌧️", url_path="drivers"),
+        st.Page(page_wards,    title=t("tab_wards", lang),    icon="🗺️", url_path="wards"),
+        st.Page(page_resources, title=CMD_TEXT["t_res"][lang],  icon="📦", url_path="resources"),
+        st.Page(page_beds,      title=CMD_TEXT["t_beds"][lang], icon="🛏️", url_path="beds"),
+        st.Page(page_whatif,    title=CMD_TEXT["t_sim"][lang],  icon="🧪", url_path="whatif"),
+        st.Page(page_dispatch,  title=CMD_TEXT["t_disp"][lang], icon="📨", url_path="dispatch"),
+        st.Page(page_ops,      title=OPS_TEXT["page_title"][lang], icon="🚨", url_path="actions"),
+        st.Page(page_accuracy, title=t("tab_accuracy", lang), icon="📊", url_path="accuracy"),
+    ]
+    if not auth.is_admin():
+        pages.append(st.Page(page_login, title=auth.T["title"][lang], icon="🔐", url_path="admin"))
+    st.navigation(pages, position="top").run()
+
+    render_help_guide(selected_ward, issue_date, issue_str, horizon, forecasts, eff, lang)
+    render_footer(lang, latest_date)
+
+
+if __name__ == "__main__":
+    main()
